@@ -12,6 +12,8 @@ import {
   ValidationPipe,
   UsePipes,
   Logger,
+  BadRequestException,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { RoadmapService } from './roadmap.service';
 import { CreateRoadmapDto } from './dto/create-roadmap.dto';
@@ -24,7 +26,7 @@ import { ShareRoadmapDto } from './dto/share-roadmap.dto';
 export class RoadmapController {
   private readonly logger = new Logger(RoadmapController.name);
 
-  constructor(private readonly roadmapService: RoadmapService) {}
+  constructor(private readonly roadmapService: RoadmapService) { }
 
   /**
    * Create a new roadmap
@@ -53,7 +55,7 @@ export class RoadmapController {
     this.logger.log(`GET /roadmaps - Fetching roadmaps for user: ${userId}`);
 
     if (!userId) {
-      throw new Error('userId query parameter is required');
+      throw new BadRequestException('userId query parameter is required');
     }
 
     return this.roadmapService.findAllByUser(userId);
@@ -74,7 +76,7 @@ export class RoadmapController {
     );
 
     if (!userId) {
-      throw new Error('userId query parameter is required');
+      throw new BadRequestException('userId query parameter is required');
     }
 
     return this.roadmapService.findOne(id, userId);
@@ -88,7 +90,7 @@ export class RoadmapController {
   @HttpCode(HttpStatus.OK)
   async updateTopicProgress(
     @Param('id') id: string,
-    @Param('topicOrder') topicOrder: string,
+    @Param('topicOrder', ParseIntPipe) topicOrder: number,
     @Query('userId') userId: string,
     @Body() updateProgressDto: UpdateProgressDto,
   ): Promise<RoadmapResponseDto> {
@@ -97,17 +99,17 @@ export class RoadmapController {
     );
 
     if (!userId) {
-      throw new Error('userId query parameter is required');
+      throw new BadRequestException('userId query parameter is required');
     }
 
     if (updateProgressDto.topicCompleted === undefined) {
-      throw new Error('topicCompleted field is required in request body');
+      throw new BadRequestException('topicCompleted field is required in request body');
     }
 
     return this.roadmapService.updateTopicProgress(
       id,
       userId,
-      parseInt(topicOrder, 10),
+      topicOrder,
       updateProgressDto.topicCompleted,
     );
   }
@@ -120,8 +122,8 @@ export class RoadmapController {
   @HttpCode(HttpStatus.OK)
   async updateSubtopicProgress(
     @Param('id') id: string,
-    @Param('topicOrder') topicOrder: string,
-    @Param('subtopicOrder') subtopicOrder: string,
+    @Param('topicOrder', ParseIntPipe) topicOrder: number,
+    @Param('subtopicOrder', ParseIntPipe) subtopicOrder: number,
     @Query('userId') userId: string,
     @Body() updateProgressDto: UpdateProgressDto,
   ): Promise<RoadmapResponseDto> {
@@ -130,18 +132,18 @@ export class RoadmapController {
     );
 
     if (!userId) {
-      throw new Error('userId query parameter is required');
+      throw new BadRequestException('userId query parameter is required');
     }
 
     if (updateProgressDto.subtopicCompleted === undefined) {
-      throw new Error('subtopicCompleted field is required in request body');
+      throw new BadRequestException('subtopicCompleted field is required in request body');
     }
 
     return this.roadmapService.updateSubtopicProgress(
       id,
       userId,
-      parseInt(topicOrder, 10),
-      parseInt(subtopicOrder, 10),
+      topicOrder,
+      subtopicOrder,
       updateProgressDto.subtopicCompleted,
       updateProgressDto.notes,
     );
@@ -160,7 +162,7 @@ export class RoadmapController {
     this.logger.log(`DELETE /roadmaps/${id} - Deleting roadmap`);
 
     if (!userId) {
-      throw new Error('userId query parameter is required');
+      throw new BadRequestException('userId query parameter is required');
     }
 
     return this.roadmapService.remove(id, userId);
@@ -176,5 +178,24 @@ export class RoadmapController {
     );
 
     return this.roadmapService.shareRoadmap(dto);
+  }
+
+  @Get('team/:teamId')
+  @HttpCode(HttpStatus.OK)
+  async getTeamRoadmaps(@Param('teamId') teamId: string) {
+    this.logger.log(`GET /roadmaps/team/${teamId} - Fetching team roadmaps`);
+    return this.roadmapService.getTeamSharedRoadmaps(teamId);
+  }
+
+  @Get('team/:teamId/roadmap/:roadmapId/progress')
+  @HttpCode(HttpStatus.OK)
+  async getTeamRoadmapProgress(
+    @Param('teamId') teamId: string,
+    @Param('roadmapId') roadmapId: string,
+  ) {
+    this.logger.log(
+      `GET /roadmaps/team/${teamId}/roadmap/${roadmapId}/progress - Fetching progress`,
+    );
+    return this.roadmapService.getTeamRoadmapProgress(teamId, roadmapId);
   }
 }

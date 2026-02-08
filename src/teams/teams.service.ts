@@ -20,7 +20,7 @@ export class TeamsService {
 
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
-  ) {}
+  ) { }
 
   /* ---------------- CREATE ---------------- */
   async createTeam(userId: string, dto: CreateTeamDto) {
@@ -175,5 +175,12 @@ export class TeamsService {
     }
 
     return this.userModel.find(query).select('_id username email').limit(5);
+  }
+
+  async getUsersByIds(userIds: string[]) {
+    return this.userModel
+      .find({ _id: { $in: userIds.map((id) => new Types.ObjectId(id)) } })
+      .select('username email')
+      .lean();
   }
 }

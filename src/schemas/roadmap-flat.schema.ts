@@ -63,11 +63,14 @@ export class RoadmapFlat {
   @Prop()
   sharedBy?: string;
 
-@Prop({ default: false })
-enabled?: boolean;
+  @Prop({ default: false })
+  enabled?: boolean;
 
-@Prop()
-teamId?:string;
+  @Prop()
+  teamId?: string;
+
+  @Prop()
+  originalRoadmapId?: string;
 
   @Prop({
     type: String,
@@ -98,6 +101,8 @@ teamId?:string;
 
 export const RoadmapFlatSchema = SchemaFactory.createForClass(RoadmapFlat);
 
-RoadmapFlatSchema.index({ userId: 1, subject: 1 });
+RoadmapFlatSchema.index({ userId: 1, subject: 1 }, { unique: true });
 RoadmapFlatSchema.index({ createdAt: -1 });
 RoadmapFlatSchema.index({ status: 1 });
+RoadmapFlatSchema.index({ teamId: 1 });
+RoadmapFlatSchema.index({ originalRoadmapId: 1 });

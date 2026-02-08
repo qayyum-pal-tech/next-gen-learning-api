@@ -3,6 +3,7 @@ import {
   Logger,
   NotFoundException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -23,7 +24,7 @@ export class RoadmapService {
     @InjectModel(RoadmapFlat.name)
     private roadmapModel: Model<RoadmapFlatDocument>,
     private aiService: AIService,
-    private teamService : TeamsService
+    private teamService: TeamsService
   ) { }
 
   /**
@@ -92,7 +93,7 @@ export class RoadmapService {
         })),
         status: 'not_started',
         difficultyLevel: difficultyLevel || 'beginner',
-        enabled:true,
+        enabled: true,
         totalEstimatedDuration: aiRoadmap.totalEstimatedDuration,
         progressPercentage: 0,
         aiGeneratedMetadata: {
@@ -406,115 +407,160 @@ Return ONLY a valid JSON object in this exact format:
   }
 
 
- async shareRoadmap(dto: ShareRoadmapDto): Promise<{ createdCount: number }> {
-  const { roadmapId, shareType, userIds, teamId, sharedBy } = dto;
-  const enabledByDefault = shareType === 'USERS';
+  async shareRoadmap(dto: ShareRoadmapDto): Promise<{ createdCount: number }> {
+    const { roadmapId, shareType, sharedBy } = dto;
+    const enabledByDefault = shareType === 'USERS';
 
-  // 1. Fetch original roadmap (must be the OWNER copy)
-  const source = await this.roadmapModel.findOne({
-    _id: roadmapId
-  }).lean();
-
-  if (!source) {
-    throw new NotFoundException(`Roadmap ${roadmapId} not found or not owned`);
-  }
-
-  // 2. Resolve target users
-  let targetUserIds: string[] = [];
-
-  if (shareType === 'USERS') {
-    if (!userIds?.length) {
-      throw new Error('userIds required for USERS share');
+    // 1. Fetch original roadmap (must be the OWNER copy)
+    const source = await this.roadmapModel.findOne({ _id: roadmapId }).lean();
+    if (!source) {
+      throw new NotFoundException(`Roadmap ${roadmapId} not found`);
     }
-    targetUserIds = userIds;
+
+    // 2. Resolve target users
+    let targetUserIds = await this.resolveShareTargets(dto);
+
+    // 3. REMOVE self-sharing
+    targetUserIds = targetUserIds.filter((userId) => userId !== sharedBy);
+    if (targetUserIds.length === 0) return { createdCount: 0 };
+
+    // 4. Find already shared users
+    const existingShares = await this.roadmapModel.find(
+      {
+        originalRoadmapId: roadmapId,
+        sharedBy,
+        userId: { $in: targetUserIds },
+      },
+      { userId: 1 }
+    ).lean();
+
+    const alreadySharedUserIds = new Set(existingShares.map((doc) => doc.userId.toString()));
+
+    // 5. Keep only NEW users
+    const newTargetUserIds = targetUserIds.filter((userId) => !alreadySharedUserIds.has(userId));
+    if (newTargetUserIds.length === 0) return { createdCount: 0 };
+
+    // 6. Clone roadmap
+    const clonedDocs = newTargetUserIds.map((targetUserId) => {
+      const { _id, createdAt, updatedAt, ...rest } = source;
+      return {
+        ...rest,
+        originalRoadmapId: roadmapId,
+        userId: targetUserId,
+        sharedBy,
+        enabled: enabledByDefault,
+        status: 'not_started',
+        progressPercentage: 0,
+        topics: rest.topics.map((topic) => ({
+          ...topic,
+          isCompleted: false,
+          subtopics: topic.subtopics.map((sub) => ({
+            ...sub,
+            isCompleted: false,
+            notes: '',
+          })),
+        })),
+        ...(shareType === 'TEAM' ? { teamId: dto.teamId } : {}),
+      };
+    });
+
+    const result = await this.roadmapModel.insertMany(clonedDocs);
+    return { createdCount: result.length };
   }
 
-  if (shareType === 'TEAM') {
-  if (!teamId) {
-    throw new Error('teamId required for TEAM share');
+  private async resolveShareTargets(dto: ShareRoadmapDto): Promise<string[]> {
+    const { shareType, userIds, teamId, sharedBy } = dto;
+
+    if (shareType === 'USERS') {
+      if (!userIds?.length) throw new BadRequestException('userIds required for USERS share');
+      return userIds;
+    }
+
+    if (shareType === 'TEAM') {
+      if (!teamId) throw new BadRequestException('teamId required for TEAM share');
+      const team = await this.teamService.getTeamById(teamId, sharedBy);
+      if (!team?.members?.length) throw new NotFoundException('Team not found or empty');
+
+      return team.members.map((member) => {
+        if (typeof member === 'object' && member._id) return member._id.toString();
+        return member.toString();
+      });
+    }
+
+    return [];
   }
 
-  const team = await this.teamService.getTeamById(teamId, sharedBy);
+  async getTeamSharedRoadmaps(teamId: string) {
+    // Group by originalRoadmapId to show unique shared roadmaps
+    const roadmaps = await this.roadmapModel.aggregate([
+      { $match: { teamId } },
+      {
+        $group: {
+          _id: '$originalRoadmapId',
+          subject: { $first: '$subject' },
+          description: { $first: '$description' },
+          totalEstimatedDuration: { $first: '$totalEstimatedDuration' },
+          difficultyLevel: { $first: '$difficultyLevel' },
+          sharedBy: { $first: '$sharedBy' },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { subject: 1 } },
+    ]);
 
-  if (!team?.members?.length) {
-    throw new NotFoundException('Team not found or empty');
+    return roadmaps.map((r) => ({
+      originalRoadmapId: r._id,
+      subject: r.subject,
+      description: r.description,
+      totalEstimatedDuration: r.totalEstimatedDuration,
+      difficultyLevel: r.difficultyLevel,
+      sharedBy: r.sharedBy,
+      memberCount: r.count,
+    }));
   }
 
-  targetUserIds = team.members
-    .map((member) => {
-      // populated user
-      if (typeof member === 'object' && member._id) {
-        return member._id.toString();
+  async getTeamRoadmapProgress(teamId: string, originalRoadmapId: string) {
+    // 1. Get all roadmap instances for this team/roadmap
+    const instances = await this.roadmapModel
+      .find({ teamId, originalRoadmapId })
+      .exec();
+
+    if (!instances.length) {
+      throw new NotFoundException('No shared roadmaps found for this team');
+    }
+
+    // 2. Get the structure from the first instance
+    const structure = this.mapToResponseDto(instances[0]);
+
+    // 3. Resolve user details (we need IDs and usernames)
+    const userIds = instances.map((ins) => ins.userId);
+    const users = await this.teamService.getUsersByIds(userIds);
+
+    const userMap = new Map(users.map((u: any) => [u._id.toString(), u.username]));
+
+    // 4. Calculate current topic for each member
+    const membersProgress = instances.map((ins) => {
+      // Find the first topic not completed
+      let currentTopicOrder = 1;
+      const firstIncomplete = ins.topics.find((t) => !t.isCompleted);
+      if (firstIncomplete) {
+        currentTopicOrder = firstIncomplete.order;
+      } else if (ins.topics.length > 0) {
+        // All complete? Show them at the last topic
+        currentTopicOrder = ins.topics[ins.topics.length - 1].order;
       }
 
-      // plain ObjectId / string
-      return member.toString();
+      return {
+        userId: ins.userId,
+        username: userMap.get(ins.userId) || 'Unknown User',
+        currentTopicOrder,
+        progressPercentage: ins.progressPercentage,
+      };
     });
-}
-
-
-  // 3. REMOVE self-sharing
-  targetUserIds = targetUserIds.filter(
-    (userId) => userId !== sharedBy
-  );
-
-  if (targetUserIds.length === 0) {
-    return { createdCount: 0 };
-  }
-
-  // 4. Find already shared users (correct query)
-  const existingShares = await this.roadmapModel.find(
-    {
-      originalRoadmapId: roadmapId,
-      sharedBy,
-      userId: { $in: targetUserIds },
-    },
-    { userId: 1 }
-  ).lean();
-
-  const alreadySharedUserIds = new Set(
-    existingShares.map((doc) => doc.userId.toString())
-  );
-
-  // 5. Keep only NEW users
-  const newTargetUserIds = targetUserIds.filter(
-    (userId) => !alreadySharedUserIds.has(userId)
-  );
-
-  if (newTargetUserIds.length === 0) {
-    return { createdCount: 0 };
-  }
-
-  // 6. Clone roadmap
-  const clonedDocs = newTargetUserIds.map((targetUserId) => {
-    const { _id, createdAt, updatedAt, ...rest } = source;
 
     return {
-      ...rest,
-      originalRoadmapId: roadmapId,
-      userId: targetUserId,
-      sharedBy,
-      enabled: enabledByDefault,
-      status: 'not_started',
-      progressPercentage: 0,
-      topics: rest.topics.map((topic) => ({
-        ...topic,
-        isCompleted: false,
-        subtopics: topic.subtopics.map((sub) => ({
-          ...sub,
-          isCompleted: false,
-          notes: '',
-        })),
-      })),
-      ...(shareType === 'TEAM' ? { teamId } : {})
+      roadmap: structure,
+      membersProgress,
     };
-  });
-
-  const result = await this.roadmapModel.insertMany(clonedDocs);
-
-  return { createdCount: result.length };
-}
-
-
-
+  }
 }
