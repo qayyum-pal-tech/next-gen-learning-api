@@ -13,6 +13,8 @@ import { ChatModule } from './modules/Chat/chat.module';
 import { RoadmapModule } from './roadmap/roadmap.module';
 import { ContentModule } from './content/content.module';
 import { AIModule } from './ai/ai.module';
+import { QuizModule } from "./quiz/quiz.module";
+import { SuggestionsModule } from "./suggestions/suggestions.module";
 
 @Module({
   imports: [
@@ -42,6 +44,8 @@ import { AIModule } from './ai/ai.module';
     AIModule,
     RoadmapModule,
     ContentModule,
+    QuizModule,
+    SuggestionsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
