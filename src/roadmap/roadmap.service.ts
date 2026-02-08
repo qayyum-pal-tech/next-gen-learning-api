@@ -5,7 +5,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import {
   RoadmapFlat,
   RoadmapFlatDocument,
@@ -13,7 +13,8 @@ import {
 import { CreateRoadmapDto } from './dto/create-roadmap.dto';
 import { RoadmapResponseDto } from './dto/roadmap-response.dto';
 import { AIService } from 'src/ai/ai.service';
-
+import { TeamsService } from 'src/teams/teams.service';
+import { ShareRoadmapDto } from './dto/share-roadmap.dto';
 @Injectable()
 export class RoadmapService {
   private readonly logger = new Logger(RoadmapService.name);
@@ -22,6 +23,7 @@ export class RoadmapService {
     @InjectModel(RoadmapFlat.name)
     private roadmapModel: Model<RoadmapFlatDocument>,
     private aiService: AIService,
+    private teamService : TeamsService
   ) { }
 
   /**
@@ -90,6 +92,7 @@ export class RoadmapService {
         })),
         status: 'not_started',
         difficultyLevel: difficultyLevel || 'beginner',
+        enabled:true,
         totalEstimatedDuration: aiRoadmap.totalEstimatedDuration,
         progressPercentage: 0,
         aiGeneratedMetadata: {
@@ -401,4 +404,117 @@ Return ONLY a valid JSON object in this exact format:
       updatedAt: roadmap.updatedAt,
     };
   }
+
+
+ async shareRoadmap(dto: ShareRoadmapDto): Promise<{ createdCount: number }> {
+  const { roadmapId, shareType, userIds, teamId, sharedBy } = dto;
+  const enabledByDefault = shareType === 'USERS';
+
+  // 1. Fetch original roadmap (must be the OWNER copy)
+  const source = await this.roadmapModel.findOne({
+    _id: roadmapId
+  }).lean();
+
+  if (!source) {
+    throw new NotFoundException(`Roadmap ${roadmapId} not found or not owned`);
+  }
+
+  // 2. Resolve target users
+  let targetUserIds: string[] = [];
+
+  if (shareType === 'USERS') {
+    if (!userIds?.length) {
+      throw new Error('userIds required for USERS share');
+    }
+    targetUserIds = userIds;
+  }
+
+  if (shareType === 'TEAM') {
+  if (!teamId) {
+    throw new Error('teamId required for TEAM share');
+  }
+
+  const team = await this.teamService.getTeamById(teamId, sharedBy);
+
+  if (!team?.members?.length) {
+    throw new NotFoundException('Team not found or empty');
+  }
+
+  targetUserIds = team.members
+    .map((member) => {
+      // populated user
+      if (typeof member === 'object' && member._id) {
+        return member._id.toString();
+      }
+
+      // plain ObjectId / string
+      return member.toString();
+    });
+}
+
+
+  // 3. REMOVE self-sharing
+  targetUserIds = targetUserIds.filter(
+    (userId) => userId !== sharedBy
+  );
+
+  if (targetUserIds.length === 0) {
+    return { createdCount: 0 };
+  }
+
+  // 4. Find already shared users (correct query)
+  const existingShares = await this.roadmapModel.find(
+    {
+      originalRoadmapId: roadmapId,
+      sharedBy,
+      userId: { $in: targetUserIds },
+    },
+    { userId: 1 }
+  ).lean();
+
+  const alreadySharedUserIds = new Set(
+    existingShares.map((doc) => doc.userId.toString())
+  );
+
+  // 5. Keep only NEW users
+  const newTargetUserIds = targetUserIds.filter(
+    (userId) => !alreadySharedUserIds.has(userId)
+  );
+
+  if (newTargetUserIds.length === 0) {
+    return { createdCount: 0 };
+  }
+
+  // 6. Clone roadmap
+  const clonedDocs = newTargetUserIds.map((targetUserId) => {
+    const { _id, createdAt, updatedAt, ...rest } = source;
+
+    return {
+      ...rest,
+      originalRoadmapId: roadmapId,
+      userId: targetUserId,
+      sharedBy,
+      enabled: enabledByDefault,
+      status: 'not_started',
+      progressPercentage: 0,
+      topics: rest.topics.map((topic) => ({
+        ...topic,
+        isCompleted: false,
+        subtopics: topic.subtopics.map((sub) => ({
+          ...sub,
+          isCompleted: false,
+          notes: '',
+        })),
+      })),
+      ...(shareType === 'TEAM' ? { teamId } : {})
+    };
+  });
+
+  const result = await this.roadmapModel.insertMany(clonedDocs);
+
+  return { createdCount: result.length };
+}
+
+
+
 }

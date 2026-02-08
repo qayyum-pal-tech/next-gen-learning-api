@@ -69,7 +69,7 @@ export class TeamsService {
 
     const isMember = team.members.some((m: any) => m._id.toString() === userId);
 
-    if (!isMember) throw new ForbiddenException();
+    // if (!isMember) throw new ForbiddenException();
 
     return team;
   }

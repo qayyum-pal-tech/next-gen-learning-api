@@ -17,6 +17,7 @@ import { RoadmapService } from './roadmap.service';
 import { CreateRoadmapDto } from './dto/create-roadmap.dto';
 import { UpdateProgressDto } from './dto/update-progress.dto';
 import { RoadmapResponseDto } from './dto/roadmap-response.dto';
+import { ShareRoadmapDto } from './dto/share-roadmap.dto';
 
 @Controller('roadmaps')
 @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
@@ -163,5 +164,17 @@ export class RoadmapController {
     }
 
     return this.roadmapService.remove(id, userId);
+  }
+
+  @Post('share')
+  @HttpCode(HttpStatus.CREATED)
+  async shareRoadmap(
+    @Body() dto: ShareRoadmapDto,
+  ): Promise<{ createdCount: number }> {
+    this.logger.log(
+      `POST /roadmaps/share - roadmap=${dto.roadmapId}, type=${dto.shareType}`,
+    );
+
+    return this.roadmapService.shareRoadmap(dto);
   }
 }

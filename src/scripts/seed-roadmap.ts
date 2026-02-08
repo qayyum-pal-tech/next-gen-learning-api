@@ -2,7 +2,7 @@
 import mongoose from 'mongoose';
 
 // Fallback to local if env var not set (dotenv not available in standalone script context)
-const MONGODB_URI = 'mongodb://localhost:27017/scalex';
+const MONGODB_URI = 'mongodb://localhost:27017/nextgen-learning';
 
 const roadmapData = {
     _id: "697a55f22d8e3b1f6b1e883f", // Standard ID used in UI
@@ -10,6 +10,7 @@ const roadmapData = {
     userId: "001",
     description: "This roadmap is designed for developers who have a foundational understanding of React JS and are looking to deepen their knowledge, master intermediate to advanced concepts, and build more robust, performant, and maintainable applications. It progresses from advanced hooks and state management to performance, testing, and architectural patterns.",
     status: "not_started",
+    enabled:true,
     difficultyLevel: "intermediate",
     totalEstimatedDuration: "75-100 hours",
     progressPercentage: 0,

@@ -60,6 +60,15 @@ export class RoadmapFlat {
   @Prop({ type: [EmbeddedTopic], default: [] })
   topics: EmbeddedTopic[];
 
+  @Prop()
+  sharedBy?: string;
+
+@Prop({ default: false })
+enabled?: boolean;
+
+@Prop()
+teamId?:string;
+
   @Prop({
     type: String,
     enum: ['not_started', 'in_progress', 'completed'],

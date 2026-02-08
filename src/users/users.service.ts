@@ -20,4 +20,17 @@ export class UsersService {
     const userid = new Types.ObjectId(userId);
     return this.userModel.findById(userid).select('-password');
   }
+
+  async searchUsers(query: string) {
+    return this.userModel
+      .find({
+        $or: [
+          { email: { $regex: query, $options: 'i' } },
+          { username: { $regex: query, $options: 'i' } },
+        ],
+      })
+      .select('-password')
+      .limit(5)
+      .exec();
+  }
 }
