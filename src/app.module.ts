@@ -50,4 +50,4 @@ import { SuggestionsModule } from "./suggestions/suggestions.module";
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule { }

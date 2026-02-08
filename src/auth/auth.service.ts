@@ -8,7 +8,7 @@ export class AuthService {
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
-  ) {}
+  ) { }
 
   async register(email: string, username: string, password: string) {
     const existingUser = await this.usersService.findByEmail(email);
@@ -42,7 +42,7 @@ export class AuthService {
       throw new BadRequestException('Invalid credentials');
     }
 
-    const payload = { sub: user._id, email: user.email };
+    const payload = { sub: user._id, email: user.email, username: user.username };
 
     return {
       accessToken: this.jwtService.sign(payload),

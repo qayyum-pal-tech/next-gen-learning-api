@@ -87,6 +87,18 @@ export class RoadmapResponseDto {
   @IsNumber()
   progressPercentage: number;
 
+  @IsEnum(['pending', 'accepted', 'denied'])
+  @IsOptional()
+  acceptanceStatus?: string;
+
+  @IsString()
+  @IsOptional()
+  sharedBy?: string;
+
+  @IsString()
+  @IsOptional()
+  teamId?: string;
+
   @IsOptional()
   aiGeneratedMetadata?: {
     model: string;

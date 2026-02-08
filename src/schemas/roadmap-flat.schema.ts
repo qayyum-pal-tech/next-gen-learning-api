@@ -79,6 +79,13 @@ export class RoadmapFlat {
   })
   status: string;
 
+  @Prop({
+    type: String,
+    enum: ['pending', 'accepted', 'denied'],
+    default: 'accepted',
+  })
+  acceptanceStatus: string;
+
   @Prop()
   difficultyLevel?: string;
 

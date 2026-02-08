@@ -400,6 +400,9 @@ Return ONLY a valid JSON object in this exact format:
       difficultyLevel: roadmap.difficultyLevel,
       totalEstimatedDuration: roadmap.totalEstimatedDuration,
       progressPercentage: roadmap.progressPercentage,
+      acceptanceStatus: roadmap.acceptanceStatus,
+      sharedBy: roadmap.sharedBy,
+      teamId: roadmap.teamId,
       aiGeneratedMetadata: roadmap.aiGeneratedMetadata,
       createdAt: roadmap.createdAt,
       updatedAt: roadmap.updatedAt,
@@ -450,6 +453,7 @@ Return ONLY a valid JSON object in this exact format:
         sharedBy,
         enabled: enabledByDefault,
         status: 'not_started',
+        acceptanceStatus: shareType === 'TEAM' ? 'pending' : 'accepted',
         progressPercentage: 0,
         topics: rest.topics.map((topic) => ({
           ...topic,
@@ -529,38 +533,71 @@ Return ONLY a valid JSON object in this exact format:
       throw new NotFoundException('No shared roadmaps found for this team');
     }
 
-    // 2. Get the structure from the first instance
-    const structure = this.mapToResponseDto(instances[0]);
-
-    // 3. Resolve user details (we need IDs and usernames)
+    // 2. Resolve users for these instances
     const userIds = instances.map((ins) => ins.userId);
     const users = await this.teamService.getUsersByIds(userIds);
-
     const userMap = new Map(users.map((u: any) => [u._id.toString(), u.username]));
 
-    // 4. Calculate current topic for each member
+    // 3. Get the OWNER (manager) instance too
+    const ownerInstance = await this.roadmapModel.findById(originalRoadmapId).exec();
+    let managerProgress = null;
+    if (ownerInstance) {
+      const ownerUser = await this.teamService.getUsersByIds([ownerInstance.userId]);
+      const ownerUsername = ownerUser[0]?.username || 'Manager';
+
+      const firstIncomplete = ownerInstance.topics.find((t) => !t.isCompleted);
+      const currentTopicOrder = firstIncomplete ? firstIncomplete.order : (ownerInstance.topics.length > 0 ? ownerInstance.topics[ownerInstance.topics.length - 1].order : 1);
+
+      managerProgress = {
+        userId: ownerInstance.userId,
+        username: `${ownerUsername} (Manager)`,
+        currentTopicOrder,
+        progressPercentage: ownerInstance.progressPercentage,
+      };
+    }
+
+    // 4. Calculate current topic for each shared member
     const membersProgress = instances.map((ins) => {
-      // Find the first topic not completed
       let currentTopicOrder = 1;
       const firstIncomplete = ins.topics.find((t) => !t.isCompleted);
       if (firstIncomplete) {
         currentTopicOrder = firstIncomplete.order;
       } else if (ins.topics.length > 0) {
-        // All complete? Show them at the last topic
         currentTopicOrder = ins.topics[ins.topics.length - 1].order;
       }
 
       return {
         userId: ins.userId,
-        username: userMap.get(ins.userId) || 'Unknown User',
+        username: userMap.get(ins.userId.toString()) || 'Unknown User',
         currentTopicOrder,
         progressPercentage: ins.progressPercentage,
       };
     });
 
+    // 5. Build clean structure (strip local completions)
+    const structure = this.mapToResponseDto(instances[0]);
+    structure.topics.forEach(t => {
+      t.isCompleted = false;
+      t.subtopics.forEach(st => st.isCompleted = false);
+    });
+
     return {
       roadmap: structure,
-      membersProgress,
+      membersProgress: managerProgress ? [managerProgress, ...membersProgress] : membersProgress,
     };
+  }
+
+  async updateAcceptanceStatus(id: string, userId: string, status: string) {
+    const roadmap = await this.roadmapModel.findOne({ _id: id, userId });
+    if (!roadmap) throw new NotFoundException(`Roadmap ${id} not found`);
+
+    roadmap.acceptanceStatus = status;
+    if (status === 'accepted') {
+      roadmap.enabled = true;
+    } else if (status === 'denied') {
+      roadmap.enabled = false;
+    }
+
+    return roadmap.save();
   }
 }

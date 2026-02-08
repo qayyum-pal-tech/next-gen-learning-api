@@ -198,4 +198,18 @@ export class RoadmapController {
     );
     return this.roadmapService.getTeamRoadmapProgress(teamId, roadmapId);
   }
+
+  @Patch(':id/acceptance')
+  @HttpCode(HttpStatus.OK)
+  async updateAcceptanceStatus(
+    @Param('id') id: string,
+    @Query('userId') userId: string,
+    @Body('status') status: string,
+  ) {
+    this.logger.log(`PATCH /roadmaps/${id}/acceptance - status=${status}`);
+    if (!userId) {
+      throw new BadRequestException('userId query parameter is required');
+    }
+    return this.roadmapService.updateAcceptanceStatus(id, userId, status);
+  }
 }
