@@ -15,6 +15,9 @@ import { ContentModule } from './content/content.module';
 import { AIModule } from './ai/ai.module';
 import { QuizModule } from "./quiz/quiz.module";
 import { SuggestionsModule } from "./suggestions/suggestions.module";
+import { AdminModule } from './admin/admin.module';
+import { LearningLogModule } from './learning-log/learning-log.module';
+
 
 @Module({
   imports: [
@@ -46,6 +49,8 @@ import { SuggestionsModule } from "./suggestions/suggestions.module";
     ContentModule,
     QuizModule,
     SuggestionsModule,
+    AdminModule,
+    LearningLogModule
   ],
   controllers: [AppController],
   providers: [AppService],
