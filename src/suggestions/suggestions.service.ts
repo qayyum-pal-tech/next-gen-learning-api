@@ -1,5 +1,5 @@
 import { Injectable, BadRequestException, InternalServerErrorException } from '@nestjs/common';
-import { AIService } from '../AI/ai.service';
+import { AIService } from "../ai/ai.service";
 
 @Injectable()
 export class SuggestionsService {

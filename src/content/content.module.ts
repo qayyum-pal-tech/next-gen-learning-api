@@ -6,12 +6,14 @@ import {
   SubtopicContent,
   SubtopicContentSchema,
 } from '../schemas/subtopic-content.schema';
+import { RoadmapFlat, RoadmapFlatSchema } from '../schemas/roadmap-flat.schema';
 import { AIModule } from 'src/ai/ai.module';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: SubtopicContent.name, schema: SubtopicContentSchema },
+      { name: RoadmapFlat.name, schema: RoadmapFlatSchema },
     ]),
     AIModule,
   ],
@@ -19,4 +21,4 @@ import { AIModule } from 'src/ai/ai.module';
   providers: [ContentService],
   exports: [ContentService],
 })
-export class ContentModule {}
+export class ContentModule { }

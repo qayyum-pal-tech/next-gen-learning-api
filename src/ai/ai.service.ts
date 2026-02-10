@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { GoogleGenAI } from '@google/genai';
+// import { GoogleGenAI } from '@google/genai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { AssessmentType, QuestionType } from '../quiz/types';
 
 interface AIOptions {
@@ -18,7 +19,7 @@ interface AIContentRequest {
 
 @Injectable()
 export class AIService {
-  private geminiAI: GoogleGenAI;
+  private geminiAI: GoogleGenerativeAI;
   private readonly defaultOptions: AIOptions = {
     provider: 'groq',
     model: 'llama-3.1-8b-instant',
@@ -27,6 +28,16 @@ export class AIService {
     jsonMode: true,
   };
 
+  private readonly groqFallbackModels = [
+    'llama-3.3-70b-versatile',
+    'llama-3.1-8b-instant',
+    'deepseek-r1-distill-llama-70b',
+    'mixtral-8x7b-32768',
+    'gemma2-9b-it',
+    'llama-3.2-3b-preview',
+    'llama-3.2-1b-preview',
+  ];
+
   constructor(private configService: ConfigService) {
     const geminiKey = process.env.GEMINI_API_KEY;
 
@@ -34,9 +45,10 @@ export class AIService {
       throw new Error('GEMINI_API_KEY is not set in environment variables');
     }
 
-    this.geminiAI = new GoogleGenAI({
-      apiKey: geminiKey,
-    });
+    // this.geminiAI = new GoogleGenAI({
+    //   apiKey: geminiKey,
+    // });
+    this.geminiAI = new GoogleGenerativeAI(geminiKey);
   }
 
   async generateContent(request: AIContentRequest): Promise<any> {
@@ -48,7 +60,35 @@ export class AIService {
       if (options.provider === 'gemini') {
         result = await this.callGemini(request.prompt, options);
       } else {
-        result = await this.callGroq(request.prompt, options);
+        // Groq logic with fallback models
+        const modelsToTry = options.model && !this.groqFallbackModels.includes(options.model)
+          ? [options.model, ...this.groqFallbackModels]
+          : this.groqFallbackModels;
+
+        let lastError: Error;
+        let success = false;
+
+        for (const model of modelsToTry) {
+          try {
+            console.log(`Trying Groq model: ${model}`);
+            result = await this.callGroq(request.prompt, { ...options, model });
+            success = true;
+            break;
+          } catch (error: any) {
+            lastError = error;
+            console.warn(`Groq model ${model} failed:`, error.message);
+            // Continue to next model
+          }
+        }
+
+        if (!success) {
+          // If all Groq models fail, fallback to Gemini
+          console.warn('All Groq models failed, falling back to Gemini:', lastError!.message);
+
+          // Remove Groq-specific options to allow callGemini to use its defaults
+          const { model: _, provider: __, ...fallbackOptions } = options;
+          result = await this.callGemini(request.prompt, { ...fallbackOptions, provider: 'gemini' });
+        }
       }
 
       if (!result) {
@@ -70,23 +110,23 @@ export class AIService {
     }
   }
 
-  async callGemini(
-    prompt: string,
-    options?: Partial<AIOptions>,
-  ): Promise<string> {
-    const model = options?.model || 'gemini-2.5-flash';
+  async callGemini(prompt: string, options?: Partial<AIOptions>): Promise<string> {
+    const modelName = options?.model || 'gemini-2.5-flash';
 
-    const response = await this.geminiAI.models.generateContent({
-      model,
-      contents: prompt,
-      config: {
-        temperature: options?.temperature || 0.7,
-        maxOutputTokens: options?.maxTokens || 2000,
+    const model = this.geminiAI.getGenerativeModel({
+      model: modelName,
+    });
+
+    const result = await model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: options?.temperature ?? 0.7,
+        maxOutputTokens: options?.maxTokens ?? 2000,
         responseMimeType: options?.jsonMode ? 'application/json' : 'text/plain',
       },
     });
 
-    return response.text;
+    return result.response.text();
   }
 
   async callGroq(
@@ -127,6 +167,11 @@ export class AIService {
 
     const data = await response.json();
     console.log('got:', data);
+
+    if (data.error) {
+      throw new Error(data.error.message || 'Groq API error');
+    }
+
     return data.choices?.[0]?.message?.content;
   }
 
@@ -421,6 +466,7 @@ Return ONLY valid JSON.
     coveredSubtopics: string[];
     difficulty: number;
     type: QuestionType;
+    previousQuestions?: string[];
   }): Promise<{
     questionText: string;
     options: string[];
@@ -429,22 +475,28 @@ Return ONLY valid JSON.
     subtopic: string;
     questionId: string;
   }> {
-    const { category, coveredSubtopics, difficulty, type } = params;
+    const { category, coveredSubtopics, difficulty, type, previousQuestions = [] } = params;
+
+    const previousContext = previousQuestions.length
+      ? `\nPREVIOUS QUESTIONS (DO NOT REPEAT OR REPHRASE THESE):\n${previousQuestions.map(q => `- ${q}`).join('\n')}\n`
+      : '';
 
     const prompt = `
 You are an expert tutor creating a diagnostic quiz for "${category}".
 
 GOAL: Assess overall knowledge by sampling from diverse subtopics.
 ALREADY COVERED: ${coveredSubtopics.length ? coveredSubtopics.join(', ') : 'None'}
+${previousContext}
 
 Generate ONE ${type.toUpperCase()} question at difficulty ${difficulty}/5.
 
 RULES:
+- The question MUST be about "${category}". DO NOT generate questions about other technologies even if they are commonly used together (unless strictly necessary).
 - For MULTIPLE_CHOICE: 4 options, one clearly correct
 - For DESCRIPTIVE: Answerable in 1-2 sentences, has clear factual answer
 - For SCENARIO: Present a realistic situation requiring application of knowledge (e.g., "You're debugging X... what do you check?")
 - Assign it to a specific SUBTOPIC within ${category} (e.g., "Closures", "Event Loop")
-- Avoid topics already covered
+- Avoid topics already covered, and DO NOT repeat previous questions.
 
 RESPONSE FORMAT (JSON ONLY):
 {
@@ -475,6 +527,7 @@ Do NOT use markdown. Return ONLY valid JSON.
     difficulty: number;
     type: QuestionType;
     topicContent?: string | null;
+    previousQuestions?: string[];
   }): Promise<{
     questionText: string;
     options: string[];
@@ -482,7 +535,7 @@ Do NOT use markdown. Return ONLY valid JSON.
     difficultyLevel: number;
     questionId: string;
   }> {
-    const { category, focusContent, difficulty, type, topicContent } = params;
+    const { category, focusContent, difficulty, type, topicContent, previousQuestions = [] } = params;
 
     const contentSection = topicContent
       ? `
@@ -495,20 +548,33 @@ CRITICAL: You MUST generate questions strictly based on the content provided abo
 `
       : '';
 
-    const prompt = `
-You are testing deep understanding of this specific concept:
-> ${focusContent}
+    const previousContext = previousQuestions.length
+      ? `\nPREVIOUS QUESTIONS (DO NOT REPEAT OR REPHRASE THESE):\n${previousQuestions.map(q => `- ${q}`).join('\n')}\n`
+      : '';
 
-CATEGORY: ${category}
-DIFFICULTY: ${difficulty}/5
-TYPE: ${type.toUpperCase()}
+    const prompt = `
+You are acting as a strict examiner.
+Target Concept: "${focusContent}"
+Broad Category: "${category}"
+Difficulty: ${difficulty}/5
+Type: ${type.toUpperCase()}
+
 ${contentSection}
+${previousContext}
+
+INSTRUCTIONS:
+1. Generate ONE question ONLY about "${focusContent}".
+2. IF "${focusContent}" is a specific subtopic (e.g., "useEffect"), the question MUST be about that specific scope. DO NOT ask about generic "${category}" concepts or other siblings (like "useState" or "props") unless they are directly necessary for the context of "${focusContent}".
+3. IGNORE any part of the "TOPIC CONTENT" that is not relevant to "${focusContent}".
+4. The question must be unsolvable without knowledge of "${focusContent}".
+5. If the content provided is not sufficient, use your general knowledge of "${focusContent}" within the context of "${category}", but prioritize the provided content.
+
 RULES:
-- Question MUST be strictly about the provided concept${topicContent ? ' and based ONLY on the content provided above' : ''}
-- No deviation to related topics
-- For SCENARIO: Create a realistic situation where this concept is applied
-- For MULTIPLE_CHOICE: 4 options, one unambiguously correct
-- For DESCRIPTIVE: Clear, concise, objectively gradable answer
+- No deviation to related topics.
+- For SCENARIO: Create a realistic situation where "${focusContent}" is the key solution.
+- For MULTIPLE_CHOICE: 4 options, one unambiguously correct.
+- For DESCRIPTIVE: Clear, concise, objectively gradable answer.
+- DO NOT repeat previous questions.
 
 RESPONSE FORMAT (JSON ONLY):
 {

@@ -182,9 +182,12 @@ export class RoadmapController {
 
   @Get('team/:teamId')
   @HttpCode(HttpStatus.OK)
-  async getTeamRoadmaps(@Param('teamId') teamId: string) {
-    this.logger.log(`GET /roadmaps/team/${teamId} - Fetching team roadmaps`);
-    return this.roadmapService.getTeamSharedRoadmaps(teamId);
+  async getTeamRoadmaps(
+    @Param('teamId') teamId: string,
+    @Query('userId') userId?: string,
+  ) {
+    this.logger.log(`GET /roadmaps/team/${teamId} - Fetching team roadmaps for user: ${userId}`);
+    return this.roadmapService.getTeamSharedRoadmaps(teamId, userId);
   }
 
   @Get('team/:teamId/roadmap/:roadmapId/progress')

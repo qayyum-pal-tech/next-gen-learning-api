@@ -80,6 +80,7 @@ export class RoadmapService {
       const roadmap = new this.roadmapModel({
         subject,
         userId,
+        version: aiRoadmap.version,
         description: aiRoadmap.description,
         topics: aiRoadmap.topics.map((topic) => ({
           ...topic,
@@ -132,26 +133,29 @@ ${additionalContext ? `Additional context: ${additionalContext}\n` : ''}
 
 Requirements:
 1. Structure the roadmap as a JSON object with topics and subtopics
-2. Each topic should have:
+2. **identify the LATEST STABLE VERSION of ${subject}** (e.g., "React 18", "Python 3.11", "Next.js 14").
+3. **Ensure ALL content, code snippets, and strict practices are valid for this specific version.**
+4. Each topic should have:
    - title: clear, concise topic name
    - order: sequential number (1, 2, 3...)
    - description: brief explanation (1-2 sentences)
    - estimatedDuration: realistic time estimate
    - subtopics: array of subtopics
 
-3. Each subtopic should have:
+5. Each subtopic should have:
    - title: clear, concise subtopic name
    - order: sequential number within the topic (1, 2, 3...)
    - description: brief explanation
    - estimatedDuration: realistic time estimate
 
-4. Include 5-8 main topics
-5. Each topic should have 2-5 subtopics
-6. Make it progressive - from fundamentals to advanced concepts
-7. Be specific and practical
+6. Include 5-8 main topics
+7. Each topic should have 2-5 subtopics
+8. Make it progressive - from fundamentals to advanced concepts
+9. Be specific and practical
 
 Return ONLY a valid JSON object in this exact format:
 {
+  "version": "The specific version used (e.g. 'React 18.2')",
   "description": "Brief overview of the ${subject} learning path",
   "totalEstimatedDuration": "estimated total time",
   "topics": [
@@ -179,6 +183,10 @@ Return ONLY a valid JSON object in this exact format:
   private validateRoadmapStructure(roadmap: any): void {
     if (!roadmap.topics || !Array.isArray(roadmap.topics)) {
       throw new Error('Invalid roadmap structure: missing topics array');
+    }
+
+    if (!roadmap.version) {
+      this.logger.warn('Roadmap generated without explicit version');
     }
 
     roadmap.topics.forEach((topic, topicIndex) => {
@@ -379,6 +387,7 @@ Return ONLY a valid JSON object in this exact format:
       id: roadmap._id.toString(),
       subject: roadmap.subject,
       userId: roadmap.userId,
+      version: roadmap.version,
       description: roadmap.description,
       topics: roadmap.topics.map((topic) => ({
         title: topic.title,
@@ -494,9 +503,9 @@ Return ONLY a valid JSON object in this exact format:
     return [];
   }
 
-  async getTeamSharedRoadmaps(teamId: string) {
+  async getTeamSharedRoadmaps(teamId: string, userId?: string) {
     // Group by originalRoadmapId to show unique shared roadmaps
-    const roadmaps = await this.roadmapModel.aggregate([
+    const groupQuery: any[] = [
       { $match: { teamId } },
       {
         $group: {
@@ -507,31 +516,40 @@ Return ONLY a valid JSON object in this exact format:
           difficultyLevel: { $first: '$difficultyLevel' },
           sharedBy: { $first: '$sharedBy' },
           count: { $sum: 1 },
+          // If we have a userId, let's also find THEIR specific status for this shared roadmap
+          users: { $push: { userId: '$userId', acceptanceStatus: '$acceptanceStatus' } }
         },
       },
       { $sort: { subject: 1 } },
-    ]);
+    ];
 
-    return roadmaps.map((r) => ({
-      originalRoadmapId: r._id,
-      subject: r.subject,
-      description: r.description,
-      totalEstimatedDuration: r.totalEstimatedDuration,
-      difficultyLevel: r.difficultyLevel,
-      sharedBy: r.sharedBy,
-      memberCount: r.count,
-    }));
+    const roadmaps = await this.roadmapModel.aggregate(groupQuery);
+
+    return roadmaps.map((r) => {
+      let myStatus = 'pending';
+      if (userId) {
+        const found = r.users.find((u: any) => u.userId === userId);
+        if (found) myStatus = found.acceptanceStatus;
+      }
+
+      return {
+        originalRoadmapId: r._id,
+        subject: r.subject,
+        description: r.description,
+        totalEstimatedDuration: r.totalEstimatedDuration,
+        difficultyLevel: r.difficultyLevel,
+        sharedBy: r.sharedBy,
+        memberCount: r.count,
+        acceptanceStatus: myStatus, // Add this for UI to disable denied ones
+      };
+    });
   }
 
   async getTeamRoadmapProgress(teamId: string, originalRoadmapId: string) {
-    // 1. Get all roadmap instances for this team/roadmap
+    // 1. Get all roadmap instances for this team/roadmap that are ACCEPTED
     const instances = await this.roadmapModel
-      .find({ teamId, originalRoadmapId })
+      .find({ teamId, originalRoadmapId, acceptanceStatus: 'accepted' })
       .exec();
-
-    if (!instances.length) {
-      throw new NotFoundException('No shared roadmaps found for this team');
-    }
 
     // 2. Resolve users for these instances
     const userIds = instances.map((ins) => ins.userId);
@@ -540,6 +558,14 @@ Return ONLY a valid JSON object in this exact format:
 
     // 3. Get the OWNER (manager) instance too
     const ownerInstance = await this.roadmapModel.findById(originalRoadmapId).exec();
+
+    // 4. Verify the roadmap was shared with this team at all if no accepted members found
+    if (!instances.length && !ownerInstance) {
+      const sharingExists = await this.roadmapModel.exists({ teamId, originalRoadmapId });
+      if (!sharingExists) {
+        throw new NotFoundException('No shared roadmaps found for this team');
+      }
+    }
     let managerProgress = null;
     if (ownerInstance) {
       const ownerUser = await this.teamService.getUsersByIds([ownerInstance.userId]);
@@ -575,7 +601,12 @@ Return ONLY a valid JSON object in this exact format:
     });
 
     // 5. Build clean structure (strip local completions)
-    const structure = this.mapToResponseDto(instances[0]);
+    // Use ownerInstance for structure if available, otherwise fallback to first instance
+    const structureSource = ownerInstance || instances[0];
+    if (!structureSource) {
+      throw new NotFoundException('Roadmap structure not found');
+    }
+    const structure = this.mapToResponseDto(structureSource);
     structure.topics.forEach(t => {
       t.isCompleted = false;
       t.subtopics.forEach(st => st.isCompleted = false);

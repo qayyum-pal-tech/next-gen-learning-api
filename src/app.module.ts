@@ -18,6 +18,7 @@ import { SuggestionsModule } from "./suggestions/suggestions.module";
 import { AdminModule } from './admin/admin.module';
 import { LearningLogModule } from './learning-log/learning-log.module';
 
+import { AnalyticsModule } from './analytics/analytics.module';
 
 @Module({
   imports: [
@@ -50,7 +51,8 @@ import { LearningLogModule } from './learning-log/learning-log.module';
     QuizModule,
     SuggestionsModule,
     AdminModule,
-    LearningLogModule
+    LearningLogModule,
+    AnalyticsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

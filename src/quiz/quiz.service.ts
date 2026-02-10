@@ -1,12 +1,14 @@
 import { Injectable, BadRequestException, NotFoundException, InternalServerErrorException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { AIService } from '../AI/ai.service';
+import { AIService } from "../ai/ai.service";
 import { Quiz } from "./quiz.schema";
 import { AssessmentType, QuestionType, QuizStatus } from './types';
 import { Types } from 'mongoose';
 import { RoadmapFlat } from '../schemas/roadmap-flat.schema';
 import { SubtopicContent } from '../schemas/subtopic-content.schema';
+import { RoadmapService } from '../roadmap/roadmap.service';
+
 @Injectable()
 export class QuizService {
   constructor(
@@ -14,7 +16,12 @@ export class QuizService {
     @InjectModel(RoadmapFlat.name) private roadmapModel: Model<RoadmapFlat>,
     @InjectModel(SubtopicContent.name) private subtopicContentModel: Model<SubtopicContent>,
     private aiService: AIService,
+    private roadmapService: RoadmapService,
   ) { }
+
+
+  private inFlightGenerations = new Map<string, Promise<any>>();
+
 
   /**
    * Helper method to fetch topic content from database
@@ -22,7 +29,7 @@ export class QuizService {
    * @param stepId - The topic order/step ID
    * @returns Formatted content string containing topic and subtopic information
    */
-  private async fetchTopicContent(pathId: string, stepId: string): Promise<string> {
+  private async fetchTopicContent(pathId: string, stepId: string, subtopicTitle?: string): Promise<string> {
     try {
       // Fetch the roadmap by ID
       const roadmap = await this.roadmapModel.findById(pathId);
@@ -43,19 +50,27 @@ export class QuizService {
       }
 
       // Fetch subtopic content from SubtopicContent collection
-      const subtopicContents = await this.subtopicContentModel.find({
+      const filter: any = {
         roadmapId: pathId,
         topicOrder: topicOrder,
-      }).sort({ subtopicOrder: 1 });
+      };
+
+      // Fetch subtopic content from SubtopicContent collection
+      const subtopicContents = await this.subtopicContentModel.find(filter).sort({ subtopicOrder: 1 });
 
       // Build comprehensive content string
       let content = `# ${topic.title}\n\n`;
-      if (topic.description) {
+      if (topic.description && !subtopicTitle) {
         content += `${topic.description}\n\n`;
       }
 
       // Add subtopic information
       for (const subtopic of topic.subtopics) {
+        // If subtopicTitle is provided, skip other subtopics
+        if (subtopicTitle && subtopic.title.toLowerCase() !== subtopicTitle.toLowerCase()) {
+          continue;
+        }
+
         content += `## ${subtopic.title}\n`;
         if (subtopic.description) {
           content += `${subtopic.description}\n`;
@@ -91,6 +106,9 @@ export class QuizService {
           }
         }
         content += `\n`;
+
+        // If we found the specific subtopic, we can stop
+        if (subtopicTitle) break;
       }
 
       return content;
@@ -154,6 +172,15 @@ export class QuizService {
         category: quiz.categoryTitle,
         subtopic: subtopicTitle || null,
       });
+      let currentQuestionDifficulty = 3;
+      if (quiz.questions.length > 0) {
+        const lastStoredQuestion = quiz.questions[quiz.questions.length - 1];
+        const lastDiff = lastStoredQuestion.difficultyLevel || 3;
+        // Re-calculate what the difficulty of THIS question should have been
+        currentQuestionDifficulty = lastStoredQuestion.score >= 7
+          ? Math.min(lastDiff + 1, 5)
+          : Math.max(lastDiff - 1, 1);
+      }
 
       // Add question to embedded array
       quiz.questions.push({
@@ -165,9 +192,10 @@ export class QuizService {
         explanation: aiEval.explanation,
         score: aiEval.score,
         subtopicTitle,
+        difficultyLevel: currentQuestionDifficulty,
       });
 
-      const MAX_QUESTIONS = 10;
+      const MAX_QUESTIONS = 5;
       const quizCompleted = quiz.questions.length >= MAX_QUESTIONS;
       const currentQuestionNumber = quiz.questions.length + 1;
       const totalQuestions = MAX_QUESTIONS;
@@ -203,6 +231,25 @@ export class QuizService {
         };
 
         await quiz.save();
+        // Update Roadmap Progress if quiz is associated with a roadmap
+        if (quiz.pathId && quiz.stepId && quiz.assessmentType === AssessmentType.SKILL_CHECK) {
+          const topicOrder = parseInt(quiz.stepId, 10);
+          if (!isNaN(topicOrder)) {
+            try {
+              // Mark the topic as completed in the roadmap
+              // We pass true because finishing the quiz implies mastery of the topic
+              await this.roadmapService.updateTopicProgress(
+                quiz.pathId,
+                quiz.userId,
+                topicOrder,
+                true
+              );
+              console.log(`Updated roadmap ${quiz.pathId} topic ${topicOrder} completion via quiz`);
+            } catch (error) {
+              console.error('Failed to update roadmap progress from quiz completion:', error);
+            }
+          }
+        }
 
         return {
           success: true,
@@ -222,13 +269,16 @@ export class QuizService {
       }
 
       // Generate next question
-      const lastDifficulty = 3;
+      // Calculate NEXT difficulty based on the current answer performance
       const nextDifficulty = aiEval.wasCorrect
-        ? Math.min(lastDifficulty + 1, 5)
-        : Math.max(lastDifficulty - 1, 1);
+        ? Math.min(currentQuestionDifficulty + 1, 5)
+        : Math.max(currentQuestionDifficulty - 1, 1);
 
       const nextType: QuestionType =
         Math.random() > 0.5 ? QuestionType.DESCRIPTIVE : QuestionType.MULTIPLE_CHOICE;
+
+      // Collect previous questions (including the one just answered/pushed)
+      const previousQuestions = quiz.questions.map(q => q.questionText);
 
       let nextQuestion;
       if (quiz.assessmentType === AssessmentType.PRE_ASSESSMENT) {
@@ -240,13 +290,14 @@ export class QuizService {
           coveredSubtopics,
           difficulty: nextDifficulty,
           type: nextType,
+          previousQuestions,
         });
       } else {
         // Fetch topic content for skill assessment
         let topicContent = null;
         if (quiz.pathId && quiz.stepId) {
           try {
-            topicContent = await this.fetchTopicContent(quiz.pathId, quiz.stepId);
+            topicContent = await this.fetchTopicContent(quiz.pathId, quiz.stepId, quiz.subtopicTitle);
           } catch (error) {
             console.error('Failed to fetch topic content:', error);
             // Continue without topic content if fetching fails
@@ -260,8 +311,10 @@ export class QuizService {
           difficulty: nextDifficulty,
           type: nextType,
           topicContent,
+          previousQuestions,
         });
       }
+      console.log("next", nextQuestion)
 
       await quiz.save();
 
@@ -297,52 +350,116 @@ export class QuizService {
         throw new NotFoundException('No active quiz found');
       }
 
+      // De-duplicate AI generation calls
+      const generationKey = `${userId}:${quizId}`;
+      if (this.inFlightGenerations.has(generationKey)) {
+        return {
+          success: true,
+          data: {
+            quizId: quiz._id.toString(),
+            question: await this.inFlightGenerations.get(generationKey),
+            currentQuestionNumber: quiz.questions.length + 1,
+          },
+        };
+      }
 
-      let nextQuestion;
+      const generationPromise = (async () => {
+        try {
+          // Collect previous questions to avoid repetition
+          const previousQuestions = quiz.questions.map(q => q.questionText);
 
-      // Handle fresh quiz (no questions yet)
-      if (quiz.questions.length === 0) {
-        if (quiz.assessmentType === AssessmentType.PRE_ASSESSMENT) {
-          nextQuestion = await this.aiService.generatePreAssessmentQuestion({
-            category: quiz.categoryTitle,
-            coveredSubtopics: [],
-            difficulty: 3,
-            type: QuestionType.MULTIPLE_CHOICE,
-          });
-        } else {
-          // Fetch topic content for skill assessment
-          let topicContent = null;
-          if (quiz.pathId && quiz.stepId) {
-            try {
-              topicContent = await this.fetchTopicContent(quiz.pathId, quiz.stepId);
-            } catch (error) {
-              console.error('Failed to fetch topic content:', error);
-              // Continue without topic content if fetching fails
+          let nextQuestion;
+
+          // Handle fresh quiz (no questions yet)
+          if (quiz.questions.length === 0) {
+            if (quiz.assessmentType === AssessmentType.PRE_ASSESSMENT) {
+              nextQuestion = await this.aiService.generatePreAssessmentQuestion({
+                category: quiz.categoryTitle,
+                coveredSubtopics: [],
+                difficulty: 3,
+                type: QuestionType.MULTIPLE_CHOICE,
+                previousQuestions,
+              });
+            } else {
+              // Fetch topic content for skill assessment
+              let topicContent = null;
+              if (quiz.pathId && quiz.stepId) {
+                try {
+                  topicContent = await this.fetchTopicContent(quiz.pathId, quiz.stepId, quiz.subtopicTitle);
+                } catch (error) {
+                  console.error('Failed to fetch topic content:', error);
+                  // Continue without topic content if fetching fails
+                }
+              }
+
+              const focusContent = quiz.subtopicTitle || quiz.categoryTitle;
+              nextQuestion = await this.aiService.generateSkillCheckQuestion({
+                category: quiz.categoryTitle,
+                focusContent,
+                difficulty: 3,
+                type: QuestionType.MULTIPLE_CHOICE,
+                topicContent,
+                previousQuestions,
+              });
             }
           }
+          // Handle in-progress quiz (has questions)
+          else {
+            const lastQuestion = quiz.questions[quiz.questions.length - 1];
 
-          const focusContent = quiz.subtopicTitle || quiz.categoryTitle;
-          nextQuestion = await this.aiService.generateSkillCheckQuestion({
-            category: quiz.categoryTitle,
-            focusContent,
-            difficulty: 3,
-            type: QuestionType.MULTIPLE_CHOICE,
-            topicContent,
-          });
+            let nextDifficulty = 3; // Default
+            if (lastQuestion.score !== undefined) {
+              nextDifficulty = lastQuestion.score >= 7
+                ? Math.min((lastQuestion.difficultyLevel || 3) + 1, 5)
+                : Math.max((lastQuestion.difficultyLevel || 3) - 1, 1);
+            }
+
+            const nextType = Math.random() > 0.5 ? QuestionType.DESCRIPTIVE : QuestionType.MULTIPLE_CHOICE;
+
+            if (quiz.assessmentType === AssessmentType.PRE_ASSESSMENT) {
+              const coveredSubtopics = [...new Set(
+                quiz.questions.map(q => q.subtopicTitle).filter(Boolean)
+              )];
+
+              nextQuestion = await this.aiService.generatePreAssessmentQuestion({
+                category: quiz.categoryTitle,
+                coveredSubtopics,
+                difficulty: nextDifficulty,
+                type: nextType,
+                previousQuestions,
+              });
+            } else {
+              // SKILL_ASSESSMENT
+              let topicContent = null;
+              if (quiz.pathId && quiz.stepId) {
+                try {
+                  topicContent = await this.fetchTopicContent(quiz.pathId, quiz.stepId, quiz.subtopicTitle);
+                } catch (error) {
+                  console.error('Failed to fetch topic content:', error);
+                }
+              }
+
+              const focusContent = quiz.subtopicTitle || quiz.categoryTitle;
+              nextQuestion = await this.aiService.generateSkillCheckQuestion({
+                category: quiz.categoryTitle,
+                focusContent,
+                difficulty: nextDifficulty,
+                type: nextType,
+                topicContent,
+                previousQuestions,
+              });
+            }
+          }
+          return nextQuestion;
+        } finally {
+          this.inFlightGenerations.delete(generationKey);
         }
-      }
-      // Handle in-progress quiz (has questions)
-      else {
-        const lastQuestion = quiz.questions[quiz.questions.length - 1];
-        const subtopic = quiz.subtopicTitle || lastQuestion?.subtopicTitle || null;
+      })();
 
-        nextQuestion = await this.aiService.generateQuestion({
-          category: quiz.categoryTitle,
-          subtopic,
-          difficulty: 3,
-          type: QuestionType.MULTIPLE_CHOICE,
-        });
-      }
+      this.inFlightGenerations.set(generationKey, generationPromise);
+      const nextQuestion = await generationPromise;
+
+      console.log("next", nextQuestion)
 
       return {
         success: true,

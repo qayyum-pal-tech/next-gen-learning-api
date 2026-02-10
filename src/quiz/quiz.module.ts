@@ -4,9 +4,10 @@ import { QuizController } from './quiz.controller';
 import { QuizService } from './quiz.service';
 
 import { Quiz, QuizSchema } from "./quiz.schema";
-import { AIModule } from "../AI/ai.module";
+import { AIModule } from "../ai/ai.module";
 import { RoadmapFlat, RoadmapFlatSchema } from '../schemas/roadmap-flat.schema';
 import { SubtopicContent, SubtopicContentSchema } from '../schemas/subtopic-content.schema';
+import { RoadmapModule } from 'src/roadmap/roadmap.module';
 
 @Module({
     imports: [
@@ -16,6 +17,7 @@ import { SubtopicContent, SubtopicContentSchema } from '../schemas/subtopic-cont
             { name: SubtopicContent.name, schema: SubtopicContentSchema },
         ]),
         AIModule,
+        RoadmapModule
     ],
     controllers: [QuizController],
     providers: [QuizService],

@@ -12,7 +12,8 @@ import {
 } from '../schemas/subtopic-content.schema';
 import { GenerateContentDto } from './dto/generate-content.dto';
 import SubtopicContentResponseDto from './dto/content-response.dto';
-import { AIService } from 'src/ai/ai.service';
+import { AIService } from "../ai/ai.service";
+import { RoadmapFlat, RoadmapFlatDocument } from '../schemas/roadmap-flat.schema';
 
 @Injectable()
 export class ContentService {
@@ -21,6 +22,8 @@ export class ContentService {
   constructor(
     @InjectModel(SubtopicContent.name)
     private contentModel: Model<SubtopicContentDocument>,
+    @InjectModel(RoadmapFlat.name)
+    private roadmapModel: Model<RoadmapFlatDocument>,
     private aiService: AIService,
   ) { }
 
@@ -60,12 +63,17 @@ export class ContentService {
     const startTime = Date.now();
 
     try {
+      // Fetch roadmap to get version info
+      const roadmap = await this.roadmapModel.findById(roadmapId).select('version').lean();
+      const versionContext = roadmap?.version ? `Target Version: ${roadmap.version}` : '';
+
       // Generate content using AI directly
       const prompt = this.buildContentPrompt(
         subtopicTitle,
         topicContext,
         difficultyLevel || 'beginner',
         additionalInstructions,
+        versionContext,
       );
 
       //   const aiContent = await this.aiService.generateContent({
@@ -158,9 +166,11 @@ export class ContentService {
     topicContext?: string,
     difficultyLevel: string = 'beginner',
     additionalInstructions?: string,
+    versionContext?: string,
   ): string {
     return `Generate comprehensive learning content for the topic: "${subtopicTitle}"
 ${topicContext ? `Context: This is part of learning "${topicContext}"` : ''}
+${versionContext ? `STRICT VERSION REQUIREMENT: Content MUST be valid for ${versionContext}. Do NOT use syntax or features from older/newer versions unless explicitly comparing.` : ''}
 Difficulty Level: ${difficultyLevel}
 ${additionalInstructions ? `\nIMPORTANT User Instructions/Feedback for regeneration: "${additionalInstructions}"\nPlease strictly follow these instructions to improve the content.` : ''}
 

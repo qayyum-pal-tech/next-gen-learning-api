@@ -51,6 +51,9 @@ export class RoadmapFlat {
   @Prop({ required: true })
   subject: string;
 
+  @Prop()
+  version?: string;
+
   @Prop({ required: true })
   userId: string;
 

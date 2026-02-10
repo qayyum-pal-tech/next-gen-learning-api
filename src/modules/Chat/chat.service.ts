@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { AIService } from '../AI/ai.service';
+import { AIService } from "../../ai/ai.service";
 
 export interface ChatServiceResponse {
   success: boolean;
@@ -11,7 +11,7 @@ export interface ChatServiceResponse {
 
 @Injectable()
 export class ChatService {
-  constructor(private readonly aiService: AIService) {}
+  constructor(private readonly aiService: AIService) { }
 
   async processMessage(userMessage: string): Promise<ChatServiceResponse> {
     try {

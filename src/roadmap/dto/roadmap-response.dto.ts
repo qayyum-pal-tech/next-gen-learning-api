@@ -68,6 +68,10 @@ export class RoadmapResponseDto {
 
   @IsString()
   @IsOptional()
+  version?: string;
+
+  @IsString()
+  @IsOptional()
   description?: string;
 
   @IsArray()

@@ -25,6 +25,9 @@ class QuizQuestion {
 
   @Prop()
   subtopicTitle?: string;
+
+  @Prop()
+  difficultyLevel?: number;
 }
 
 const InsightsSchema = {
