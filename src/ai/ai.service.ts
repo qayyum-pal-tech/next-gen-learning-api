@@ -5,7 +5,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { AssessmentType, QuestionType } from '../quiz/types';
 
 interface AIOptions {
-  provider?: 'gemini' | 'groq';
+  provider?: 'gemini' | 'groq'| 'mistral';
   model?: string;
   temperature?: number;
   maxTokens?: number;
@@ -28,16 +28,30 @@ export class AIService {
     jsonMode: true,
   };
 
-  private readonly groqFallbackModels = [
-    'llama-3.3-70b-versatile',
-    'llama-3.1-8b-instant',
-    'deepseek-r1-distill-llama-70b',
-    'mixtral-8x7b-32768',
-    'gemma2-9b-it',
-    'llama-3.2-3b-preview',
-    'llama-3.2-1b-preview',
-  ];
 
+
+  private readonly availableModels = {
+    groq: [
+      'llama-3.1-8b-instant',    
+      'llama3-8b-8192',         
+      'gemma-7b-it',          
+      'llama-3.2-3b-preview',   
+      'llama-3.2-1b-preview',   
+    ],
+    
+    gemini: [
+      'gemini-1.5-flash',        
+      'gemini-1.5-pro',     
+      'gemini-1.0-pro',    
+    ],
+    
+    mistral: [
+      'mistral-small',    
+      'open-mistral-7b',   
+      'open-mixtral-8x7b',  
+      'mistral-large-latest'  
+    ]
+  };
   constructor(private configService: ConfigService) {
     const geminiKey = process.env.GEMINI_API_KEY;
 
@@ -51,54 +65,180 @@ export class AIService {
     this.geminiAI = new GoogleGenerativeAI(geminiKey);
   }
 
+  // async generateContent(request: AIContentRequest): Promise<any> {
+  //   const options = { ...this.defaultOptions, ...request.options };
+
+  //   try {
+  //     let result: string;
+
+  //     if (options.provider === 'gemini') {
+  //       result = await this.callGemini(request.prompt, options);
+  //     } else {
+  //       // Groq logic with fallback models
+  //       const modelsToTry = options.model && !this.groqFallbackModels.includes(options.model)
+  //         ? [options.model, ...this.groqFallbackModels]
+  //         : this.groqFallbackModels;
+
+  //       let lastError: Error;
+  //       let success = false;
+
+  //       for (const model of modelsToTry) {
+  //         try {
+  //           console.log(`Trying Groq model: ${model}`);
+  //           result = await this.callGroq(request.prompt, { ...options, model });
+  //           success = true;
+  //           break;
+  //         } catch (error: any) {
+  //           lastError = error;
+  //           console.warn(`Groq model ${model} failed:`, error.message);
+  //           // Continue to next model
+  //         }
+  //       }
+
+  //       if (!success) {
+  //         // If all Groq models fail, fallback to Gemini
+  //         console.warn('All Groq models failed, falling back to Gemini:', lastError!.message);
+
+  //         // Remove Groq-specific options to allow callGemini to use its defaults
+  //         const { model: _, provider: __, ...fallbackOptions } = options;
+  //         result = await this.callGemini(request.prompt, { ...fallbackOptions, provider: 'gemini' });
+  //       }
+  //     }
+
+  //     if (!result) {
+  //       throw new Error('No response from AI');
+  //     }
+
+  //     if (options.jsonMode) {
+  //       try {
+  //         return JSON.parse(result);
+  //       } catch {
+  //         return result;
+  //       }
+  //     }
+
+  //     return result;
+  //   } catch (error) {
+  //     console.error('AI Service Error:', error);
+  //     throw error;
+  //   }
+  // }
+
+  // async callGemini(prompt: string, options?: Partial<AIOptions>): Promise<string> {
+  //   const modelName = options?.model || 'gemini-2.5-flash';
+
+  //   const model = this.geminiAI.getGenerativeModel({
+  //     model: modelName,
+  //   });
+
+  //   const result = await model.generateContent({
+  //     contents: [{ role: 'user', parts: [{ text: prompt }] }],
+  //     generationConfig: {
+  //       temperature: options?.temperature ?? 0.7,
+  //       maxOutputTokens: options?.maxTokens ?? 2000,
+  //       responseMimeType: options?.jsonMode ? 'application/json' : 'text/plain',
+  //     },
+  //   });
+
+  //   return result.response.text();
+  // }
+
+  // async callGroq(
+  //   prompt: string,
+  //   options?: Partial<AIOptions>,
+  // ): Promise<string> {
+  //   const apiKey = this.configService.get<string>('GROQ_API_KEY');
+  //   const model = options?.model || 'llama-3.1-8b-instant';
+
+  //   const messages = [{ role: 'user', content: prompt }];
+
+  //   const body: any = {
+  //     model,
+  //     messages,
+  //     temperature: options?.temperature || 0.7,
+  //     max_tokens: options?.maxTokens || 2000,
+  //   };
+
+  //   if (options?.jsonMode) {
+  //     messages.unshift({
+  //       role: 'system',
+  //       content: 'You must respond with valid JSON only.',
+  //     });
+  //     body.response_format = { type: 'json_object' };
+  //   }
+
+  //   const response = await fetch(
+  //     'https://api.groq.com/openai/v1/chat/completions',
+  //     {
+  //       method: 'POST',
+  //       headers: {
+  //         Authorization: `Bearer ${apiKey}`,
+  //         'Content-Type': 'application/json',
+  //       },
+  //       body: JSON.stringify(body),
+  //     },
+  //   );
+
+  //   const data = await response.json();
+  //   console.log('got:', data);
+
+  //   if (data.error) {
+  //     throw new Error(data.error.message || 'Groq API error');
+  //   }
+
+  //   return data.choices?.[0]?.message?.content;
+  // }
+
+
+
+
   async generateContent(request: AIContentRequest): Promise<any> {
     const options = { ...this.defaultOptions, ...request.options };
 
     try {
       let result: string;
 
-      if (options.provider === 'gemini') {
-        result = await this.callGemini(request.prompt, options);
-      } else {
-        // Groq logic with fallback models
-        const modelsToTry = options.model && !this.groqFallbackModels.includes(options.model)
-          ? [options.model, ...this.groqFallbackModels]
-          : this.groqFallbackModels;
+      const providerChain = this.getProviderChain(options.provider);
+      
+      let lastError: Error | null = null;
 
-        let lastError: Error;
-        let success = false;
-
-        for (const model of modelsToTry) {
-          try {
-            console.log(`Trying Groq model: ${model}`);
-            result = await this.callGroq(request.prompt, { ...options, model });
-            success = true;
-            break;
-          } catch (error: any) {
-            lastError = error;
-            console.warn(`Groq model ${model} failed:`, error.message);
-            // Continue to next model
+      for (const provider of providerChain) {
+        try {
+          console.log(`Trying provider: ${provider}`);
+          
+          if (provider === 'groq') {
+            result = await this.callGroqWithFallback(request.prompt, options);
+          } else if (provider === 'gemini') {
+            result = await this.callGeminiWithFallback(request.prompt, options);
+          } else if (provider === 'mistral') {
+            result = await this.callMistralWithFallback(request.prompt, options);
           }
-        }
-
-        if (!success) {
-          // If all Groq models fail, fallback to Gemini
-          console.warn('All Groq models failed, falling back to Gemini:', lastError!.message);
-
-          // Remove Groq-specific options to allow callGemini to use its defaults
-          const { model: _, provider: __, ...fallbackOptions } = options;
-          result = await this.callGemini(request.prompt, { ...fallbackOptions, provider: 'gemini' });
+          
+          console.log(`✅ Success with provider: ${provider}`);
+          break; // Exit loop on success
+          
+        } catch (error: any) {
+          lastError = error;
+          console.warn(`❌ Provider ${provider} failed:`, error.message);
+          
+          // Log more details for debugging
+          if (error.response?.data) {
+            console.warn('Error details:', JSON.stringify(error.response.data, null, 2));
+          }
+          continue; // Try next provider
         }
       }
 
       if (!result) {
-        throw new Error('No response from AI');
+        throw lastError || new Error('All AI providers failed');
       }
 
+      // Parse JSON if requested
       if (options.jsonMode) {
         try {
           return JSON.parse(result);
         } catch {
+          // Return as plain text if JSON parsing fails
           return result;
         }
       }
@@ -110,32 +250,166 @@ export class AIService {
     }
   }
 
+  private getProviderChain(preferredProvider?: string): string[] {
+    // Default chain: Groq -> Gemini -> Mistral
+    const defaultChain = ['groq',  'mistral'];
+    
+    if (!preferredProvider) {
+      return defaultChain;
+    }
+    
+    // Move preferred provider to front
+    const otherProviders = defaultChain.filter(p => p !== preferredProvider);
+    return [preferredProvider, ...otherProviders];
+  }
+
+  // GROQ with model fallback
+  private async callGroqWithFallback(prompt: string, options: AIOptions): Promise<string> {
+    const modelsToTry = options.model && !this.availableModels.groq.includes(options.model)
+      ? [options.model, ...this.availableModels.groq]
+      : this.availableModels.groq;
+
+    let lastError: Error | null = null;
+
+    for (const model of modelsToTry) {
+      try {
+        console.log(`  Trying Groq model: ${model}`);
+        return await this.callGroq(prompt, { ...options, model });
+      } catch (error: any) {
+        lastError = error;
+        
+        // If it's NOT a rate limit error, don't try other models
+        if (!this.isRateLimitError(error)) {
+          console.warn(`  Groq model ${model} failed with non-rate-limit error:`, error.message);
+          throw error;
+        }
+        
+        console.warn(`  Groq model ${model} rate limited:`, error.message);
+        continue; // Try next model
+      }
+    }
+
+    throw lastError || new Error('All Groq models failed');
+  }
+
+  // GEMINI with model fallback
+  private async callGeminiWithFallback(prompt: string, options: AIOptions): Promise<string> {
+    const modelsToTry = options.model && !this.availableModels.gemini.includes(options.model)
+      ? [options.model, ...this.availableModels.gemini]
+      : this.availableModels.gemini;
+
+    let lastError: Error | null = null;
+
+    for (const model of modelsToTry) {
+      try {
+        console.log(`  Trying Gemini model: ${model}`);
+        return await this.callGemini(prompt, { ...options, model });
+      } catch (error: any) {
+        lastError = error;
+        
+        // Gemini errors
+        if (this.isRateLimitError(error) || 
+            error.message?.includes('429') || 
+            error.message?.includes('quota') ||
+            error.message?.includes('resource exhausted')) {
+          console.warn(`  Gemini model ${model} quota exceeded:`, error.message);
+          continue; // Try next model
+        }
+        
+        // Model not found error
+        if (error.message?.includes('not found') || error.message?.includes('404')) {
+          console.warn(`  Gemini model ${model} not available:`, error.message);
+          continue; // Try next model
+        }
+        
+        throw error; // Other errors should bubble up
+      }
+    }
+
+    throw lastError || new Error('All Gemini models failed');
+  }
+
+  // MISTRAL with model fallback - FIXED
+  private async callMistralWithFallback(prompt: string, options: AIOptions): Promise<string> {
+    const modelsToTry = options.model && !this.availableModels.mistral.includes(options.model)
+      ? [options.model, ...this.availableModels.mistral]
+      : this.availableModels.mistral;
+
+    let lastError: Error | null = null;
+
+    for (const model of modelsToTry) {
+      try {
+        console.log(`  Trying Mistral model: ${model}`);
+        return await this.callMistral(prompt, { ...options, model });
+      } catch (error: any) {
+        lastError = error;
+        
+        // Mistral rate limit errors
+        if (this.isRateLimitError(error) || 
+            error.message?.includes('429') ||
+            error.message?.includes('rate_limit')) {
+          console.warn(`  Mistral model ${model} rate limited:`, error.message);
+          continue; // Try next model
+        }
+        
+        // Model not found (400 error)
+        if (error.message?.includes('400') || 
+            error.message?.includes('model_not_found') ||
+            error.message?.includes('Invalid model')) {
+          console.warn(`  Mistral model ${model} not found/invalid:`, error.message);
+          continue; // Try next model
+        }
+        
+        throw error;
+      }
+    }
+
+    throw lastError || new Error('All Mistral models failed');
+  }
+
+  private isRateLimitError(error: any): boolean {
+    const message = error.message || '';
+    return message.includes('rate limit') || 
+           message.includes('Rate limit') ||
+           message.includes('429') ||
+           error.code === 'rate_limit_exceeded' ||
+           error.status === 429;
+  }
+
   async callGemini(prompt: string, options?: Partial<AIOptions>): Promise<string> {
-    const modelName = options?.model || 'gemini-2.5-flash';
+    const modelName = options?.model || 'gemini-1.5-flash';
 
     const model = this.geminiAI.getGenerativeModel({
       model: modelName,
     });
 
-    const result = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: options?.temperature ?? 0.7,
-        maxOutputTokens: options?.maxTokens ?? 2000,
-        responseMimeType: options?.jsonMode ? 'application/json' : 'text/plain',
-      },
-    });
+    try {
+      const result = await model.generateContent({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: options?.temperature ?? 0.7,
+          maxOutputTokens: options?.maxTokens ?? 2000,
+          responseMimeType: options?.jsonMode ? 'application/json' : 'text/plain',
+        },
+      });
 
-    return result.response.text();
+      return result.response.text();
+    } catch (error: any) {
+      // Enhance Gemini error messages
+      const errorMsg = error.message || 'Gemini API error';
+      const enhancedError = new Error(`Gemini (${modelName}): ${errorMsg}`);
+      (enhancedError as any).originalError = error;
+      throw enhancedError;
+    }
   }
 
-  async callGroq(
-    prompt: string,
-    options?: Partial<AIOptions>,
-  ): Promise<string> {
+  async callGroq(prompt: string, options?: Partial<AIOptions>): Promise<string> {
     const apiKey = this.configService.get<string>('GROQ_API_KEY');
-    const model = options?.model || 'llama-3.1-8b-instant';
+    if (!apiKey) {
+      throw new Error('GROQ_API_KEY not configured');
+    }
 
+    const model = options?.model || 'llama-3.1-8b-instant';
     const messages = [{ role: 'user', content: prompt }];
 
     const body: any = {
@@ -153,27 +427,144 @@ export class AIService {
       body.response_format = { type: 'json_object' };
     }
 
-    const response = await fetch(
-      'https://api.groq.com/openai/v1/chat/completions',
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
+    try {
+      const response = await fetch(
+        'https://api.groq.com/openai/v1/chat/completions',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
         },
-        body: JSON.stringify(body),
-      },
-    );
+      );
 
-    const data = await response.json();
-    console.log('got:', data);
+      const data = await response.json();
+      
+      if (!response.ok) {
+        const errorMsg = data.error?.message || `Groq API HTTP ${response.status}`;
+        throw new Error(`Groq (${model}): ${errorMsg}`);
+      }
 
-    if (data.error) {
-      throw new Error(data.error.message || 'Groq API error');
+      if (data.error) {
+        throw new Error(`Groq (${model}): ${data.error.message || 'Groq API error'}`);
+      }
+
+      return data.choices?.[0]?.message?.content || '';
+    } catch (error: any) {
+      const enhancedError = new Error(`Groq (${model}): ${error.message}`);
+      (enhancedError as any).originalError = error;
+      throw enhancedError;
+    }
+  }
+
+  async callMistral(prompt: string, options?: Partial<AIOptions>): Promise<string> {
+    const apiKey = this.configService.get<string>('MISTRAL_API_KEY');
+    if (!apiKey) {
+      throw new Error('MISTRAL_API_KEY not configured');
     }
 
-    return data.choices?.[0]?.message?.content;
+    const model = options?.model || 'open-mistral-7b'; // Default to always-free model
+    const messages = [{ role: 'user', content: prompt }];
+
+    const body: any = {
+      model,
+      messages,
+      temperature: options?.temperature || 0.7,
+      max_tokens: options?.maxTokens || 2000,
+      top_p: 1,
+      random_seed: 42,
+    };
+
+    if (options?.jsonMode) {
+      messages.unshift({
+        role: 'system',
+        content: 'You must respond with valid JSON only.',
+      });
+      // Mistral supports JSON mode
+      body.response_format = { type: 'json_object' };
+    }
+
+    try {
+      const response = await fetch(
+        'https://api.mistral.ai/v1/chat/completions',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: JSON.stringify(body),
+        },
+      );
+
+      const data = await response.json();
+      
+      if (!response.ok) {
+        const errorMsg = data.error?.message || 
+                        data.message || 
+                        `Mistral API HTTP ${response.status}`;
+        throw new Error(`Mistral (${model}): ${errorMsg}`);
+      }
+
+      if (data.error) {
+        throw new Error(`Mistral (${model}): ${data.error.message || 'Mistral API error'}`);
+      }
+
+      if (!data.choices?.[0]?.message?.content) {
+        throw new Error(`Mistral (${model}): Invalid response format`);
+      }
+
+      return data.choices[0].message.content;
+    } catch (error: any) {
+      const enhancedError = new Error(`Mistral (${model}): ${error.message}`);
+      (enhancedError as any).originalError = error;
+      throw enhancedError;
+    }
   }
+
+  // Helper method to test all models
+  async testAllModels(): Promise<any> {
+    const testPrompt = 'Respond with "OK" only.';
+    const results: any = {};
+    
+    for (const [provider, models] of Object.entries(this.availableModels)) {
+      results[provider] = {};
+      
+      for (const model of models) {
+        try {
+          console.log(`Testing ${provider} - ${model}...`);
+          let response;
+          
+          if (provider === 'groq') {
+            response = await this.callGroq(testPrompt, { model, jsonMode: false });
+          } else if (provider === 'gemini') {
+            response = await this.callGemini(testPrompt, { model, jsonMode: false });
+          } else if (provider === 'mistral') {
+            response = await this.callMistral(testPrompt, { model, jsonMode: false });
+          }
+          
+          results[provider][model] = {
+            status: 'success',
+            response: response?.substring(0, 50) + '...'
+          };
+        } catch (error: any) {
+          results[provider][model] = {
+            status: 'error',
+            message: error.message
+          };
+        }
+        
+        // Small delay between tests
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+    
+    return results;
+  }
+
 
 
   async generateQuestion(params: {
